@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: opensms
+  profiles:
+    default: local
+server:
+  port: ${SERVER_PORT:8080}
+opensms:
+  gateway:
+    mode: ${OPENSMS_GATEWAY_MODE:MOCK}
+  outbox:
+    dispatcher:
+      enabled: ${OPENSMS_OUTBOX_DISPATCHER_ENABLED:false}
+      poll-interval-ms: ${OPENSMS_OUTBOX_POLL_INTERVAL_MS:5000}
+      batch-size: ${OPENSMS_OUTBOX_BATCH_SIZE:20}
+      claim-timeout-ms: ${OPENSMS_OUTBOX_CLAIM_TIMEOUT_MS:300000}
+      max-attempts: ${OPENSMS_OUTBOX_MAX_ATTEMPTS:5}
+      initial-backoff-ms: ${OPENSMS_OUTBOX_INITIAL_BACKOFF_MS:10000}
+      max-backoff-ms: ${OPENSMS_OUTBOX_MAX_BACKOFF_MS:900000}
+  webhooks:
+    encryption-key: ${OPENSMS_WEBHOOK_ENCRYPTION_KEY:}

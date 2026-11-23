@@ -1,0 +1,20 @@
+logging:
+  level:
+    root: INFO
+    com.opensms: DEBUG
+spring:
+  datasource:
+    url: "${DB_URL:jdbc:postgresql://localhost:5432/opensms}"
+    username: "${DB_USERNAME}"
+    password: "${DB_PASSWORD}"
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    show-sql: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    validate-on-migrate: true
+
