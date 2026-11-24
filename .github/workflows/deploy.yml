@@ -25,56 +25,7 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # 2. Verify GitHub execution identity
-      - name: Debug GitHub identity
-        run: |
-          echo "Repository: $GITHUB_REPOSITORY"
-          echo "Ref: $GITHUB_REF"
-          echo "Event: $GITHUB_EVENT_NAME"
-
-      # 3. Inspect OIDC token claims without exposing the token
-      - name: Inspect GitHub OIDC claims
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import os
-          import json
-          import base64
-          from urllib.request import Request, urlopen
-          from urllib.parse import urlencode
-
-          url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
-          separator = "&" if "?" in url else "?"
-          url += separator + urlencode({
-              "audience": "sts.amazonaws.com"
-          })
-
-          request = Request(
-              url,
-              headers={
-                  "Authorization": (
-                      "bearer " +
-                      os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
-                  )
-              }
-          )
-
-          with urlopen(request) as response:
-              token = json.loads(response.read())["value"]
-
-          payload = token.split(".")[1]
-          payload += "=" * (-len(payload) % 4)
-
-          claims = json.loads(
-              base64.urlsafe_b64decode(payload)
-          )
-
-          print("OIDC issuer:", claims.get("iss"))
-          print("OIDC audience:", claims.get("aud"))
-          print("OIDC subject:", claims.get("sub"))
-          PY
-
-      # 4. Authenticate with AWS using GitHub OIDC
+      # 2. Configure AWS credentials using GitHub OIDC
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -82,12 +33,12 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
           audience: sts.amazonaws.com
 
-      # 5. Login to Amazon ECR
+      # 3. Login to Amazon ECR
       - name: Login to Amazon ECR
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 6. Build and push Docker image
+      # 4. Build and push Docker image
       - name: Build and push Docker image
         env:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
@@ -110,7 +61,7 @@ jobs:
 
           echo "Image pushed successfully."
 
-      # 7. Deploy to EC2 through SSM
+      # 5. Deploy to EC2 through SSM
       - name: Deploy to EC2 through SSM
         shell: bash
         env:
@@ -129,7 +80,7 @@ jobs:
           echo "Image: $IMAGE_URI"
 
           REMOTE_SCRIPT=$(cat <<EOF
-          set -euo pipefail
+          set -eu
 
           echo "Starting OpenSMS deployment..."
 
@@ -216,7 +167,6 @@ jobs:
             --output text)
 
           echo "SSM Command ID: $COMMAND_ID"
-
           echo "Waiting for deployment..."
 
           for i in $(seq 1 120); do
@@ -242,8 +192,8 @@ jobs:
               exit 0
             fi
 
-            if [[ "$STATUS" == "Failed" || \
-                  "$STATUS" == "Cancelled" || \
+            if [[ "$STATUS" == "Failed" ||
+                  "$STATUS" == "Cancelled" ||
                   "$STATUS" == "TimedOut" ]]; then
 
               echo "Deployment failed."
