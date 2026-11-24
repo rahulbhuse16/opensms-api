@@ -25,60 +25,107 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # 2. Authenticate with AWS using GitHub OIDC
+      # 2. Verify GitHub execution identity
+      - name: Debug GitHub identity
+        run: |
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Ref: $GITHUB_REF"
+          echo "Event: $GITHUB_EVENT_NAME"
+
+      # 3. Inspect OIDC token claims without exposing the token
+      - name: Inspect GitHub OIDC claims
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          import json
+          import base64
+          from urllib.request import Request, urlopen
+          from urllib.parse import urlencode
+
+          url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
+          separator = "&" if "?" in url else "?"
+          url += separator + urlencode({
+              "audience": "sts.amazonaws.com"
+          })
+
+          request = Request(
+              url,
+              headers={
+                  "Authorization": (
+                      "bearer " +
+                      os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
+                  )
+              }
+          )
+
+          with urlopen(request) as response:
+              token = json.loads(response.read())["value"]
+
+          payload = token.split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+
+          claims = json.loads(
+              base64.urlsafe_b64decode(payload)
+          )
+
+          print("OIDC issuer:", claims.get("iss"))
+          print("OIDC audience:", claims.get("aud"))
+          print("OIDC subject:", claims.get("sub"))
+          PY
+
+      # 4. Authenticate with AWS using GitHub OIDC
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
+          audience: sts.amazonaws.com
 
-      # 3. Authenticate Docker with Amazon ECR
+      # 5. Login to Amazon ECR
       - name: Login to Amazon ECR
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 4. Build and push Docker image
+      # 6. Build and push Docker image
       - name: Build and push Docker image
         env:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          set -e
+          set -euo pipefail
 
-          echo "Building OpenSMS API Docker image..."
+          echo "Building OpenSMS API image..."
 
           docker build \
             -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
             .
 
-          echo "Pushing image to Amazon ECR..."
+          echo "Pushing image to ECR..."
 
           docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
-          echo "Docker image pushed successfully."
+          echo "Image pushed successfully."
 
-      # 5. Deploy application to EC2 using AWS SSM
+      # 7. Deploy to EC2 through SSM
       - name: Deploy to EC2 through SSM
+        shell: bash
         env:
           AWS_REGION: ${{ secrets.AWS_REGION }}
           EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
           IMAGE_TAG: ${{ github.sha }}
-        shell: bash
         run: |
           set -euo pipefail
 
           IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
-          echo "Preparing deployment..."
-          echo "Image: $IMAGE_URI"
+          echo "Preparing OpenSMS deployment..."
           echo "EC2 Instance: $EC2_INSTANCE_ID"
+          echo "Image: $IMAGE_URI"
 
-          # Create deployment script for EC2.
-          # Local variables are expanded here; escaped variables
-          # are evaluated later on the EC2 instance.
           REMOTE_SCRIPT=$(cat <<EOF
           set -euo pipefail
 
@@ -87,7 +134,7 @@ jobs:
           mkdir -p /opt/opensms
           umask 077
 
-          echo "Retrieving database configuration from Parameter Store..."
+          echo "Retrieving database configuration..."
 
           DB_URL=\$(aws ssm get-parameter \
             --name "/opensms/prod/DB_URL" \
@@ -107,7 +154,6 @@ jobs:
             --query "Parameter.Value" \
             --output text)
 
-          # Create protected environment file.
           install -m 600 /dev/null /opt/opensms/.env
 
           printf 'DB_URL=%s\nDB_USERNAME=%s\nDB_PASSWORD=%s\nSERVER_PORT=8080\n' \
@@ -116,7 +162,7 @@ jobs:
 
           unset DB_PASSWORD
 
-          echo "Logging in to Amazon ECR..."
+          echo "Logging in to ECR..."
 
           aws ecr get-login-password --region "$AWS_REGION" \
             | docker login \
@@ -127,11 +173,11 @@ jobs:
 
           docker pull "$IMAGE_URI"
 
-          echo "Stopping previous container if present..."
+          echo "Removing previous container..."
 
           docker rm -f opensms-api 2>/dev/null || true
 
-          echo "Starting new OpenSMS API container..."
+          echo "Starting OpenSMS API..."
 
           docker run -d \
             --name opensms-api \
@@ -147,18 +193,17 @@ jobs:
           echo "Container status:"
           docker ps --filter "name=opensms-api"
 
-          echo "Recent application logs:"
+          echo "Application logs:"
           docker logs --tail 30 opensms-api
 
-          echo "OpenSMS deployment command completed."
+          echo "Deployment command completed."
           EOF
           )
 
-          # Convert the remote script into valid JSON.
           PARAMETERS=$(jq -cn --arg script "$REMOTE_SCRIPT" \
             '{commands: [$script]}')
 
-          echo "Sending deployment command to EC2..."
+          echo "Sending deployment command through SSM..."
 
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "$EC2_INSTANCE_ID" \
@@ -170,8 +215,7 @@ jobs:
 
           echo "SSM Command ID: $COMMAND_ID"
 
-          # Poll SSM until deployment completes.
-          echo "Waiting for deployment result..."
+          echo "Waiting for deployment..."
 
           for i in $(seq 1 120); do
 
@@ -185,7 +229,7 @@ jobs:
 
             if [ "$STATUS" = "Success" ]; then
 
-              echo "Deployment successful!"
+              echo "Deployment command succeeded."
 
               aws ssm get-command-invocation \
                 --command-id "$COMMAND_ID" \
@@ -200,7 +244,7 @@ jobs:
                   "$STATUS" == "Cancelled" || \
                   "$STATUS" == "TimedOut" ]]; then
 
-              echo "Deployment failed!"
+              echo "Deployment failed."
 
               aws ssm get-command-invocation \
                 --command-id "$COMMAND_ID" \
