@@ -93,15 +93,16 @@ jobs:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
           IMAGE_TAG: ${{ github.sha }}
+        shell: bash
         run: |
           set -euo pipefail
 
           echo "Building OpenSMS API image..."
 
           docker build \
-         -f backend/Dockerfile \
-         -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
-         ./backend
+            -f backend/Dockerfile \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            ./backend
 
           echo "Pushing image to ECR..."
 
