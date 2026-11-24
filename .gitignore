@@ -21,8 +21,8 @@ out/
 
 # Environment files and secrets
 .env
-.env.*
-!.env.example
+.env
+!.env
 *.pem
 *.key
 

@@ -99,8 +99,9 @@ jobs:
           echo "Building OpenSMS API image..."
 
           docker build \
-            -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
-            .
+         -f backend/Dockerfile \
+         -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+         ./backend
 
           echo "Pushing image to ECR..."
 
